@@ -1,0 +1,47 @@
+version: 2
+
+before:
+  hooks:
+    # The Studio is published beside the binaries as a release asset.
+    - make studio
+
+builds:
+  - id: tegami
+    main: ./cmd/tegami
+    binary: tegami
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - CHANGELOG.md
+      - THIRD_PARTY_NOTICES.md
+      - README.md
+      - README.ja.md
+      - docs/**/*
+
+checksum:
+  name_template: checksums.txt
+  extra_files:
+    - glob: build/tegami.html
+
+release:
+  extra_files:
+    - glob: build/tegami.html
+  footer: |
+    **Just want to send or open a file?** Download `tegami.html` and open it in
+    your browser; nothing to install. [Verify it first](https://github.com/rubyattack3r/tegami/blob/main/docs/getting-started.md#verifying-downloads).
+
+# Release notes come from CHANGELOG.md through --release-notes; see
+# .github/workflows/release.yml. Do not set changelog.disable: it also drops
+# the notes passed with --release-notes.

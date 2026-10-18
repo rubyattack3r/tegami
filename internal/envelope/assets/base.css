@@ -1,0 +1,71 @@
+/*
+ * Shared by the Studio and the CLI delivery page. Colors follow T3 Code: a
+ * near-black neutral (or near-white) background, cards lifted slightly toward
+ * the foreground, hairline borders, and a single indigo primary. The Studio's
+ * theme switch sets html[data-theme]; otherwise the system setting applies.
+ * The font stacks name Linux desktop fonts before system-ui, which WebKitGTK
+ * resolves through fontconfig instead of the desktop's font setting.
+ */
+:root{--bg:#0a0a0a;--fg:#f5f5f5;--card:color-mix(in srgb,var(--bg) 97%,#fff);--sidebar:var(--card);--soft:rgb(255 255 255/3%);--hover:rgb(255 255 255/5%);--border:rgb(255 255 255/7%);--input:rgb(255 255 255/10%);--muted:color-mix(in srgb,#737373 90%,#fff);--primary:oklch(.571 .21 264);--on-primary:#fff;--success:#34d399;--error:#f87171;--warning:#fbbf24;--shadow:0 14px 32px -18px rgb(0 0 0/75%);--radius:10px;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Adwaita Sans",Cantarell,"Ubuntu Sans","Noto Sans",system-ui,"Hiragino Sans","Noto Sans JP","Noto Sans CJK JP",sans-serif;--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Adwaita Mono","Liberation Mono",monospace;color-scheme:dark}
+@media(prefers-color-scheme:light){:root:not([data-theme=dark]){--bg:oklch(99.2% 0 0);--fg:#27272a;--card:#fff;--sidebar:#fafafa;--soft:#fafafa;--hover:#f4f4f5;--border:#e4e4e7;--input:#d4d4d8;--muted:#71717a;--primary:oklch(.488 .217 264);--success:#047857;--error:#b91c1c;--warning:#b45309;--shadow:0 12px 28px -18px rgb(0 0 0/40%);color-scheme:light}}
+:root[data-theme=light]{--bg:oklch(99.2% 0 0);--fg:#27272a;--card:#fff;--sidebar:#fafafa;--soft:#fafafa;--hover:#f4f4f5;--border:#e4e4e7;--input:#d4d4d8;--muted:#71717a;--primary:oklch(.488 .217 264);--success:#047857;--error:#b91c1c;--warning:#b45309;--shadow:0 12px 28px -18px rgb(0 0 0/40%);color-scheme:light}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+html{font-family:var(--sans);font-size:14px;line-height:1.5;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
+body{min-height:100vh;background:var(--bg);color:var(--fg)}
+::selection{background:color-mix(in srgb,var(--primary) 30%,transparent)}
+input,button{font:inherit;color:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed}
+:focus-visible{outline:2px solid color-mix(in srgb,var(--primary) 70%,transparent);outline-offset:2px}
+.icon{width:18px;height:18px;flex:none}
+.icon-sm{width:16px;height:16px;flex:none}
+.muted{color:var(--muted)}
+.mono{font-family:var(--mono)}
+.surface{background:var(--card);border:1px solid var(--border);border-radius:calc(var(--radius) + 4px);box-shadow:var(--shadow)}
+.label{font-size:12px;font-weight:500;color:var(--muted)}
+.field{display:grid;gap:8px}
+.input{display:flex;align-items:center;gap:2px;height:40px;padding:0 4px 0 0;border:1px solid var(--input);border-radius:var(--radius);background:var(--soft);transition:border-color .15s,box-shadow .15s}
+.input:focus-within{border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 25%,transparent)}
+.input input{flex:1;min-width:0;height:100%;border:0;background:transparent;padding:0 12px;outline:0;font-family:var(--mono);font-size:13px}
+.input input::placeholder{font-family:var(--sans);color:var(--muted)}
+.icon-button{display:inline-grid;place-items:center;width:32px;height:32px;border:0;border-radius:calc(var(--radius) - 2px);background:transparent;color:var(--muted);transition:background .15s,color .15s}
+.icon-button:hover{background:var(--hover);color:var(--fg)}
+.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);font-size:13px;font-weight:500;transition:background .15s,border-color .15s,filter .15s}
+.button:hover{background:var(--hover)}
+.button.primary{border-color:transparent;background:var(--primary);color:var(--on-primary);box-shadow:inset 0 1px rgb(255 255 255/16%)}
+.button.primary:hover{filter:brightness(1.1)}
+.button:disabled{opacity:.5;filter:none}
+.button.primary:disabled{cursor:progress}
+.button.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+.button.ghost:hover{background:var(--hover);color:var(--fg)}
+progress{width:100%;height:4px;border:0;border-radius:2px;background:var(--hover);accent-color:var(--primary);overflow:hidden}
+progress::-webkit-progress-bar{background:var(--hover)}
+progress::-webkit-progress-value{background:var(--primary)}
+progress::-moz-progress-bar{background:var(--primary)}
+.status{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--muted)}
+.status:empty{display:none}
+.status[data-state]{padding:10px 12px;border:1px solid;border-radius:var(--radius)}
+.status[data-state=error]{color:var(--error);background:color-mix(in srgb,var(--error) 8%,transparent);border-color:color-mix(in srgb,var(--error) 25%,transparent)}
+.status[data-state=success]{color:var(--success);background:color-mix(in srgb,var(--success) 8%,transparent);border-color:color-mix(in srgb,var(--success) 25%,transparent)}
+.unlock{width:min(100%,420px);padding:28px;display:grid;gap:20px}
+.unlock-file{display:grid;justify-items:center;gap:4px;text-align:center}
+.tile{display:grid;place-items:center;width:52px;height:52px;margin-bottom:10px;border:1px solid var(--border);border-radius:14px;background:var(--soft);color:var(--primary)}
+.tile .icon{width:24px;height:24px}
+.file-name{font-size:16px;font-weight:600;letter-spacing:-.01em;overflow-wrap:anywhere}
+.unlock form{display:grid;gap:12px}
+.unlock .button.primary{width:100%;height:40px}
+.centered{min-height:100vh;display:grid;place-items:center;padding:24px}
+.sprite{position:absolute;width:0;height:0;overflow:hidden}
+.menu-anchor{position:relative}
+.menu{position:absolute;z-index:10;display:grid;gap:2px;min-width:168px;padding:4px;border:1px solid var(--border);border-radius:12px;background:var(--card);box-shadow:var(--shadow),0 0 0 1px rgb(0 0 0/10%)}
+.menu [role=menuitemradio]{display:flex;align-items:center;justify-content:space-between;gap:16px;height:34px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--fg);font-size:13px;text-align:left}
+.menu [role=menuitemradio]:hover,.menu [role=menuitemradio]:focus-visible{background:var(--hover);outline:0}
+.menu .check{color:var(--primary);visibility:hidden}
+.menu [aria-checked=true] .check{visibility:visible}
+.button.small{height:28px;padding:0 8px;font-size:12px;gap:6px}
+/* On a delivery the picker sits under the form and opens below it. */
+.language-picker{justify-self:center}
+.language-picker .menu{left:50%;top:calc(100% + 6px);transform:translateX(-50%)}
+.language-picker [aria-expanded=true]{background:var(--hover);color:var(--fg)}
+:lang(ja){word-break:auto-phrase;line-break:strict}
