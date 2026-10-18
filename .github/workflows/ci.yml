@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, to catch newly published vulnerabilities
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # ratchet:cachix/install-nix-action@v31
+      - name: Format, vet, lint, tests, and build
+        run: nix develop --command make check
+      - name: Nix package
+        run: nix flake check
+      - name: Release configuration
+        run: nix develop --command goreleaser check
+      - name: Cross-compile release targets
+        run: nix develop --command goreleaser build --snapshot --clean
+
+  browser:
+    name: Browser checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # ratchet:cachix/install-nix-action@v31
+      # The runner image ships Google Chrome; nixpkgs Chromium is not used, so
+      # the dev shell stays the same on every platform.
+      - name: Studio and delivery pages in headless Chrome
+        run: nix develop --command make browser-test CHROMIUM="$(command -v google-chrome)"
+
+  vulncheck:
+    name: Vulnerability check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # ratchet:cachix/install-nix-action@v31
+      - run: nix develop --command make vulncheck
+
+  ratchet:
+    name: Pinned actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
+      - uses: sethvargo/ratchet@9ca118155b0f79464185703a50da367e111107cd # ratchet:exclude tag:v0.12.0
+        with:
+          files: .github/workflows/*.yml
