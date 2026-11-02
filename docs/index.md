@@ -9,6 +9,8 @@ browser, offline.
   a first file.
 - [Studio guide](studio.md): sending and opening files in the browser.
 - [CLI reference](cli-reference.md): every command and option of `tegami`.
+- [Hosting a delivery](hosting.md): putting an HTML delivery on a website so
+  recipients can download it intact.
 
 ## Understand what is protected
 

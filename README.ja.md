@@ -71,6 +71,7 @@ pg_dump shop | tegami pack --input - --name shop.sql --output - \
 | [Getting started](docs/getting-started.md) | ダウンロード、リリースの確認、最初の受け渡し |
 | [Studio guide](docs/studio.md) | ブラウザーでのファイルの送信と復号、トラブルシューティング |
 | [CLI reference](docs/cli-reference.md) | `tegami pack`、`tegami open`、パイプ、JSON 出力、終了ステータス |
+| [Hosting a delivery](docs/hosting.md) | HTML ファイルを Web サイトに置き、受信者がそのままの状態でダウンロードできるようにする方法 |
 | [Security model](docs/security.md) | Tegami が守るもの、守らないもの、受信者に見える情報 |
 | [File formats](docs/formats.md) | `tegami/v1` の形式仕様 |
 | [Developer documentation](docs/development/index.md) | 開発環境、アーキテクチャ、リリース手順（開発者向け） |
