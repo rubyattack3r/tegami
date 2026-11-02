@@ -40,7 +40,7 @@
   "format.blobDetail": "Up to 3 GiB. Opened with this page in Chrome or Edge.",
   "format.blobUnavailable": "Up to 3 GiB. Needs Chrome, Edge, or another Chromium browser.",
   "format.html": "HTML file",
-  "format.htmlDetail": "Up to 500 MiB. Opens in any browser; large files open best in Chrome, Edge, or Firefox.",
+  "format.htmlDetail": "Up to 500 MiB. Opens in any browser; Safari can take a while to load large files.",
   "format.title": "Format",
   "language.en": "English",
   "language.ja": "日本語",

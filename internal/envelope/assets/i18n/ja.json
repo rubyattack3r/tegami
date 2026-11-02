@@ -40,7 +40,7 @@
   "format.blobDetail": "3 GiB まで。受信者は Chrome か Edge で、このページから開きます。",
   "format.blobUnavailable": "3 GiB まで。Chrome や Edge などの Chromium 系ブラウザーで使えます。",
   "format.html": "HTML ファイル",
-  "format.htmlDetail": "500 MiB まで。受信者はブラウザーだけで開けます。サイズが大きい場合は Chrome、Edge、Firefox で開くと確実です。",
+  "format.htmlDetail": "500 MiB まで。受信者はブラウザーだけで開けます。大きなファイルは、Safari だと読み込みに時間がかかることがあります。",
   "format.title": "形式",
   "language.en": "English",
   "language.ja": "日本語",
