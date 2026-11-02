@@ -5,6 +5,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-02
+
+### Added
+
+- **A guide to hosting a delivery on a website**, for networks that check or
+  rewrite web pages: how to serve deliveries as downloads, and what to tell
+  recipients. See [Hosting a delivery](docs/hosting.md).
+
 ### Changed
 
 - **HTML deliveries hold up to 500 MiB**, up from 50 MiB, and still open in
@@ -21,6 +29,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `tegami open` and the Studio's Open tab no longer open HTML files made with
   0.1.0, and say so when given one. Those files still open on their own in a
   browser, or with the 0.1.0 Studio or CLI.
+
+### Security
+
+- Built with Go 1.26.10, which fixes GO-2026-6809 in `crypto/x509`. Tegami
+  itself makes no network connections, so it was not exposed.
 
 ## [0.1.0] - 2026-10-18
 
