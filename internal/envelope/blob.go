@@ -1,6 +1,7 @@
 package envelope
 
 import (
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
@@ -20,8 +21,9 @@ const (
 
 var blobMagic = [8]byte{'T', 'E', 'G', 'A', 'M', 'I', '1', 0}
 
-// blobHeader is the tegami/v1 streaming header. As in envelopes, the filename
-// is sealed in Name with the content key.
+// blobHeader is the tegami/v1 header of a chunked delivery: a .tegami file or
+// an HTML page with records. As in envelopes, the filename is sealed in Name
+// with the content key.
 type blobHeader struct {
 	Schema    string           `json:"schema"`
 	ID        string           `json:"id"`
@@ -32,131 +34,141 @@ type blobHeader struct {
 	Commit    string           `json:"commit"`
 }
 
-func packStreamingBlob(inputPath, outputPath string, password []byte) (string, error) {
-	var codename string
-	err := writeStreamingBlob(inputPath, outputPath, password, &codename)
-	return codename, err
+// chunkedInput is a file ready to be encrypted in 4 MiB records.
+type chunkedInput struct {
+	file     *os.File
+	header   blobHeader
+	aead     cipher.AEAD
+	codename string
 }
 
-func writeStreamingBlob(inputPath, outputPath string, password []byte, codename *string) error {
+// openChunkedInput checks the input and password, generates the content key,
+// and seals the filename. The caller closes the input.
+func openChunkedInput(inputPath string, password []byte, limit int64, tooLarge string) (*chunkedInput, error) {
 	if err := validatePassword(password); err != nil {
-		return err
+		return nil, err
 	}
 	input, err := os.Open(inputPath)
 	if err != nil {
-		return fmt.Errorf("open input: %w", err)
+		return nil, fmt.Errorf("open input: %w", err)
 	}
-	defer func() { _ = input.Close() }()
+	prepared, err := prepareChunkedInput(input, inputPath, password, limit, tooLarge)
+	if err != nil {
+		_ = input.Close()
+		return nil, err
+	}
+	return prepared, nil
+}
+
+func prepareChunkedInput(input *os.File, inputPath string, password []byte, limit int64, tooLarge string) (*chunkedInput, error) {
 	info, err := input.Stat()
 	if err != nil {
-		return fmt.Errorf("inspect input: %w", err)
+		return nil, fmt.Errorf("inspect input: %w", err)
 	}
 	switch {
 	case !info.Mode().IsRegular():
-		return errors.New("input must be a regular file; archive folders first, for example with tar or zip")
+		return nil, errors.New("input must be a regular file; archive folders first, for example with tar or zip")
 	case info.Size() < 1:
-		return errors.New("input is empty; there is nothing to encrypt")
-	case info.Size() > MaximumBlobInputBytes:
-		return fmt.Errorf("input is larger than %d GiB, the limit for deliveries; split it first", MaximumBlobInputBytes>>30)
+		return nil, errors.New("input is empty; there is nothing to encrypt")
+	case info.Size() > limit:
+		return nil, errors.New(tooLarge)
 	}
 	filename, err := portableFilename(filepath.Base(inputPath))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	id := make([]byte, idBytes)
 	contentKey := make([]byte, keyBytes)
 	if _, err := io.ReadFull(rand.Reader, id); err != nil {
-		return fmt.Errorf("generate envelope ID: %w", err)
+		return nil, fmt.Errorf("generate envelope ID: %w", err)
 	}
 	if _, err := io.ReadFull(rand.Reader, contentKey); err != nil {
-		return fmt.Errorf("generate content key: %w", err)
+		return nil, fmt.Errorf("generate content key: %w", err)
 	}
 	defer clear(contentKey)
 	identifier := base64.RawURLEncoding.EncodeToString(id)
 	slot, err := wrapContentKey(identifier, contentKey, password)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	aead, err := newGCM(contentKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	name, err := sealName(aead, identifier, filename)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if *codename, err = Codename(identifier); err != nil {
-		return err
-	}
-	header, err := json.Marshal(blobHeader{Schema: schemaV1, ID: identifier, Size: info.Size(), Name: name, ChunkSize: BlobChunkBytes, Unlock: slot, Commit: encodeCommitment(contentKey, identifier)})
+	codename, err := Codename(identifier)
 	if err != nil {
-		return fmt.Errorf("encode blob header: %w", err)
+		return nil, err
 	}
-	if len(header) > maxBlobHeaderBytes {
-		return fmt.Errorf("blob header exceeds %d bytes", maxBlobHeaderBytes)
-	}
+	header := blobHeader{Schema: schemaV1, ID: identifier, Size: info.Size(), Name: name, ChunkSize: BlobChunkBytes, Unlock: slot, Commit: encodeCommitment(contentKey, identifier)}
+	return &chunkedInput{file: input, header: header, aead: aead, codename: codename}, nil
+}
 
-	temporary, err := os.CreateTemp(filepath.Dir(outputPath), ".tegami-*")
-	if err != nil {
-		return fmt.Errorf("create output: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	complete := false
-	defer func() {
-		_ = temporary.Close()
-		if !complete {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if _, err := temporary.Write(blobMagic[:]); err != nil {
-		return fmt.Errorf("write blob magic: %w", err)
-	}
-	if err := binary.Write(temporary, binary.BigEndian, uint32(len(header))); err != nil {
-		return fmt.Errorf("write blob header length: %w", err)
-	}
-	if _, err := temporary.Write(header); err != nil {
-		return fmt.Errorf("write blob header: %w", err)
-	}
+func (c *chunkedInput) close() {
+	_ = c.file.Close()
+}
+
+// encrypt reads the input in 4 MiB chunks and passes each record's index,
+// nonce, and ciphertext to emit.
+func (c *chunkedInput) encrypt(emit func(index uint64, nonce, ciphertext []byte) error) error {
 	buffer := make([]byte, BlobChunkBytes)
-	for index, remaining := uint64(0), info.Size(); remaining > 0; index++ {
-		count := BlobChunkBytes
-		if remaining < int64(count) {
-			count = int(remaining)
-		}
-		if _, err := io.ReadFull(input, buffer[:count]); err != nil {
+	defer clear(buffer)
+	for index, remaining := uint64(0), c.header.Size; remaining > 0; index++ {
+		count := int(min(int64(BlobChunkBytes), remaining))
+		if _, err := io.ReadFull(c.file, buffer[:count]); err != nil {
 			return fmt.Errorf("read input: %w", err)
 		}
 		nonce := make([]byte, nonceBytes)
 		if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 			return fmt.Errorf("generate chunk nonce: %w", err)
 		}
-		ciphertext := aead.Seal(nil, nonce, buffer[:count], blobChunkMetadata(identifier, info.Size(), index, count))
-		if err := binary.Write(temporary, binary.BigEndian, uint32(len(ciphertext))); err != nil {
-			return fmt.Errorf("write chunk length: %w", err)
-		}
-		if _, err := temporary.Write(nonce); err != nil {
-			return fmt.Errorf("write chunk nonce: %w", err)
-		}
-		if _, err := temporary.Write(ciphertext); err != nil {
-			return fmt.Errorf("write encrypted chunk: %w", err)
+		ciphertext := c.aead.Seal(nil, nonce, buffer[:count], blobChunkMetadata(c.header.ID, c.header.Size, index, count))
+		if err := emit(index, nonce, ciphertext); err != nil {
+			return fmt.Errorf("write output: %w", err)
 		}
 		remaining -= int64(count)
 	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("sync output: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close output: %w", err)
-	}
-	if err := os.Chmod(temporaryPath, 0o600); err != nil {
-		return fmt.Errorf("protect output: %w", err)
-	}
-	if err := os.Rename(temporaryPath, outputPath); err != nil {
-		return fmt.Errorf("publish output: %w", err)
-	}
-	complete = true
 	return nil
+}
+
+func packStreamingBlob(inputPath, outputPath string, password []byte) (string, error) {
+	input, err := openChunkedInput(inputPath, password, MaximumBlobInputBytes, fmt.Sprintf("input is larger than %d GiB, the limit for deliveries; split it first", MaximumBlobInputBytes>>30))
+	if err != nil {
+		return "", err
+	}
+	defer input.close()
+	header, err := json.Marshal(input.header)
+	if err != nil {
+		return "", fmt.Errorf("encode blob header: %w", err)
+	}
+	if len(header) > maxBlobHeaderBytes {
+		return "", fmt.Errorf("blob header exceeds %d bytes", maxBlobHeaderBytes)
+	}
+	return input.codename, writeAtomically(outputPath, func(w io.Writer) error {
+		if _, err := w.Write(blobMagic[:]); err != nil {
+			return fmt.Errorf("write blob magic: %w", err)
+		}
+		if err := binary.Write(w, binary.BigEndian, uint32(len(header))); err != nil {
+			return fmt.Errorf("write blob header length: %w", err)
+		}
+		if _, err := w.Write(header); err != nil {
+			return fmt.Errorf("write blob header: %w", err)
+		}
+		return input.encrypt(func(_ uint64, nonce, ciphertext []byte) error {
+			if err := binary.Write(w, binary.BigEndian, uint32(len(ciphertext))); err != nil {
+				return err
+			}
+			if _, err := w.Write(nonce); err != nil {
+				return err
+			}
+			_, err := w.Write(ciphertext)
+			return err
+		})
+	})
 }
 
 func blobChunkMetadata(envelopeID string, size int64, index uint64, chunkSize int) []byte {

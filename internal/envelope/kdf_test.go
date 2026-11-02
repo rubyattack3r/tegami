@@ -28,7 +28,8 @@ func TestPasswordKeyMatchesMonocypher(t *testing.T) {
 }
 
 func TestReadersRejectInvalidKDFBeforeUnlock(t *testing.T) {
-	data, err := seal("report.txt", []byte("report"), []byte("correct horse battery staple"))
+	data := headerFromPage(t, packedPage(t, []byte("report")))
+	codename, err := Codename(data.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,20 +44,18 @@ func TestReadersRejectInvalidKDFBeforeUnlock(t *testing.T) {
 		"short wrapped key": func(slot *unlockSlot) { slot.WrappedKey = "YQ" },
 	} {
 		t.Run(name, func(t *testing.T) {
-			slot := data.Unlocks[0]
-			mutate(&slot)
 			modified := data
-			modified.Unlocks = []unlockSlot{slot}
-			page, err := renderPage(modified)
+			mutate(&modified.Unlock)
+			header, err := json.Marshal(modified)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := readPage(page, FormatHTML); !errors.Is(err, ErrNotDelivery) {
+			page, err := renderPage(codename, data.Size, header)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readPage(page, ""); !errors.Is(err, ErrNotDelivery) {
 				t.Fatalf("HTML: %v, want ErrNotDelivery", err)
-			}
-			header, err := json.Marshal(blobHeader{Schema: schemaV1, ID: data.ID, Size: data.Size, Name: data.Name, ChunkSize: BlobChunkBytes, Unlock: slot, Commit: data.Commit})
-			if err != nil {
-				t.Fatal(err)
 			}
 			blob := append([]byte(nil), blobMagic[:]...)
 			blob = binary.BigEndian.AppendUint32(blob, uint32(len(header)))
@@ -87,15 +86,20 @@ func TestNamePadding(t *testing.T) {
 			t.Fatalf("unpadName accepted %q", padded)
 		}
 	}
-	short, err := seal("a", []byte("x"), []byte("correct horse battery staple"))
+	key := make([]byte, keyBytes)
+	aead, err := newGCM(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	long, err := seal(strings.Repeat("y", 120), []byte("x"), []byte("correct horse battery staple"))
+	short, err := sealName(aead, "id", "a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(short.Name.Ciphertext) != len(long.Name.Ciphertext) {
+	long, err := sealName(aead, "id", strings.Repeat("y", 120))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(short.Ciphertext) != len(long.Ciphertext) {
 		t.Fatal("sealed names reveal their length")
 	}
 }
@@ -117,7 +121,7 @@ func TestCommitmentAndParametersAreChecked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := packageFromPage(t, page)
+	data := headerFromPage(t, page)
 	rewrite := func(name, from, to string) string {
 		target := filepath.Join(directory, name)
 		if err := os.WriteFile(target, []byte(strings.Replace(string(page), from, to, 1)), 0o600); err != nil {
@@ -150,14 +154,7 @@ func TestCommitmentAndParametersAreChecked(t *testing.T) {
 // CSP-hashed script.
 func TestPagesPinTheArgon2Module(t *testing.T) {
 	sum := sha256.Sum256([]byte(asset("argon2.wasm")))
-	data, err := seal("report.txt", []byte("report"), []byte("correct horse battery staple"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	page, err := renderPage(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	page := packedPage(t, []byte("report"))
 	for name, content := range map[string]string{"studio": studioPage, "delivery": string(page)} {
 		if !strings.Contains(content, `wasmSHA256 = "`+hex.EncodeToString(sum[:])+`"`) || strings.Contains(content, "__TEGAMI_ARGON2_SHA256__") {
 			t.Errorf("%s page does not pin argon2.wasm", name)

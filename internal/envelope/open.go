@@ -20,9 +20,9 @@ var (
 	ErrUnlock      = errors.New("the password is incorrect, or the delivery is damaged")
 )
 
-// maxPageBytes bounds the HTML page read for an envelope: base64 of the
-// largest payload plus the page around it.
-const maxPageBytes = 128 << 20
+// pageHeadBytes is how much of an HTML file readers search for the package
+// element. Pages put it before their records, well within the first MiB.
+const pageHeadBytes = 1 << 20
 
 var packageElement = []byte(`<script id="tegami-package" type="application/json">`)
 
@@ -37,9 +37,8 @@ type Delivery struct {
 	slot    unlockSlot
 	commit  string
 	name    encryptedPayload
-	payload encryptedPayload // HTML deliveries
-	path    string           // blob deliveries
-	records int64            // offset of the first blob record
+	path    string
+	records int64 // offset of the first record
 }
 
 // ReadDelivery reads the public metadata of an HTML or .tegami delivery.
@@ -61,41 +60,69 @@ func ReadDelivery(path string) (*Delivery, error) {
 	case bytes.HasPrefix(prefix, []byte("PK\x03\x04")):
 		return nil, fmt.Errorf("%w: this is a ZIP file; extract it and open the HTML delivery inside", ErrNotDelivery)
 	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("read delivery: %w", err)
-	}
-	page, err := io.ReadAll(io.LimitReader(file, maxPageBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read delivery: %w", err)
-	}
-	if len(page) > maxPageBytes {
-		return nil, ErrNotDelivery
-	}
-	return readPage(page, FormatHTML)
-}
-
-func readPage(page []byte, format Format) (*Delivery, error) {
-	start := bytes.Index(page, packageElement)
-	if start < 0 {
-		return nil, ErrNotDelivery
-	}
-	content := page[start+len(packageElement):]
-	end := bytes.Index(content, []byte("</script>"))
-	if end < 0 {
-		return nil, ErrNotDelivery
-	}
-	var data packageData
-	if err := json.Unmarshal(content[:end], &data); err != nil {
-		return nil, ErrNotDelivery
-	}
-	if data.Schema != schemaV1 || len(data.Unlocks) != 1 || data.Size < 1 || data.Size > MaximumInputBytes || !validSlot(data.Unlocks[0]) || !validMetadata(data.Unlocks[0], data.Commit, data.Name) || !validSealed(data.Payload, int(data.Size)+16) {
-		return nil, ErrNotDelivery
-	}
-	codename, err := deliveryCodename(data.ID)
+	// Treat the page as bytes and never parse its markup.
+	page, err := readHead(file)
 	if err != nil {
 		return nil, err
 	}
-	return &Delivery{Format: format, Codename: codename, Size: data.Size, id: data.ID, slot: data.Unlocks[0], commit: data.Commit, name: data.Name, payload: data.Payload}, nil
+	return readPage(page, path)
+}
+
+// readHead reads up to pageHeadBytes from the start of file.
+func readHead(file *os.File) ([]byte, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("read delivery: %w", err)
+	}
+	page, err := io.ReadAll(io.LimitReader(file, pageHeadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read delivery: %w", err)
+	}
+	return page, nil
+}
+
+// readPage reads the delivery whose package element is in page.
+func readPage(page []byte, path string) (*Delivery, error) {
+	raw, records, ok := findPackage(page)
+	if !ok {
+		return nil, ErrNotDelivery
+	}
+	return readPackage(raw, path, int64(records))
+}
+
+// findPackage returns the package JSON and the offset just after its element.
+func findPackage(page []byte) ([]byte, int, bool) {
+	start := bytes.Index(page, packageElement)
+	if start < 0 {
+		return nil, 0, false
+	}
+	start += len(packageElement)
+	end := bytes.Index(page[start:], []byte(recordEnd))
+	if end < 0 {
+		return nil, 0, false
+	}
+	return page[start : start+end], start + end + len(recordEnd), true
+}
+
+// readPackage reads the header in an HTML delivery's package element. HTML
+// files made by Tegami 0.1.0 hold an older package that only their own page
+// opens.
+func readPackage(raw []byte, path string, records int64) (*Delivery, error) {
+	var header struct {
+		blobHeader
+		Unlocks json.RawMessage `json:"unlocks"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return nil, ErrNotDelivery
+	}
+	if header.Unlocks != nil {
+		return nil, fmt.Errorf("%w: it was made by Tegami 0.1.0; open the file in a browser instead", ErrNotDelivery)
+	}
+	delivery, err := deliveryFromHeader(header.blobHeader, MaximumInputBytes)
+	if err != nil {
+		return nil, err
+	}
+	delivery.Format, delivery.path, delivery.records = FormatHTML, path, records
+	return delivery, nil
 }
 
 func readBlob(file *os.File, path string) (*Delivery, error) {
@@ -111,14 +138,23 @@ func readBlob(file *os.File, path string) (*Delivery, error) {
 	if err := json.Unmarshal(raw, &header); err != nil {
 		return nil, ErrNotDelivery
 	}
-	if header.Schema != schemaV1 || header.Size < 1 || header.Size > MaximumBlobInputBytes || header.ChunkSize != BlobChunkBytes || !validSlot(header.Unlock) || !validMetadata(header.Unlock, header.Commit, header.Name) {
+	delivery, err := deliveryFromHeader(header, MaximumBlobInputBytes)
+	if err != nil {
+		return nil, err
+	}
+	delivery.Format, delivery.path, delivery.records = FormatBlob, path, int64(len(blobMagic))+4+int64(length)
+	return delivery, nil
+}
+
+func deliveryFromHeader(header blobHeader, limit int64) (*Delivery, error) {
+	if header.Schema != schemaV1 || header.Size < 1 || header.Size > limit || header.ChunkSize != BlobChunkBytes || !validSlot(header.Unlock) || !validMetadata(header.Unlock, header.Commit, header.Name) {
 		return nil, ErrNotDelivery
 	}
 	codename, err := deliveryCodename(header.ID)
 	if err != nil {
 		return nil, err
 	}
-	return &Delivery{Format: FormatBlob, Codename: codename, Size: header.Size, id: header.ID, slot: header.Unlock, commit: header.Commit, name: header.Name, path: path, records: int64(len(blobMagic)) + 4 + int64(length)}, nil
+	return &Delivery{Codename: codename, Size: header.Size, id: header.ID, slot: header.Unlock, commit: header.Commit, name: header.Name}, nil
 }
 
 func validSlot(slot unlockSlot) bool {
@@ -213,25 +249,76 @@ func (u *Unlocked) Close() {
 	clear(u.key)
 }
 
-// WriteTo decrypts the delivery into w. Blob deliveries are decrypted and
-// authenticated record by record, so on error w may hold partial output that
-// must be discarded.
+// WriteTo decrypts the delivery into w. Deliveries with records are decrypted
+// and authenticated record by record, so on error w may hold partial output
+// that must be discarded.
 func (u *Unlocked) WriteTo(w io.Writer) (int64, error) {
 	content, err := newGCM(u.key)
 	if err != nil {
 		return 0, err
 	}
 	d := u.delivery
-	if d.Format != FormatBlob {
-		plaintext, err := openSealedValue(content, d.payload, payloadMetadata(d.id, d.Size))
-		if err != nil || int64(len(plaintext)) != d.Size {
-			return 0, ErrUnlock
-		}
-		defer clear(plaintext)
-		n, err := w.Write(plaintext)
-		return int64(n), err
+	if d.Format == FormatBlob {
+		return u.writeBlob(content, w)
 	}
-	return u.writeBlob(content, w)
+	return u.writePageRecords(content, w)
+}
+
+// writePageRecords decrypts the records of an HTML delivery. Each must follow
+// the previous one directly, with exactly the length its chunk requires, and
+// no further record may follow the last.
+func (u *Unlocked) writePageRecords(content cipher.AEAD, w io.Writer) (int64, error) {
+	d := u.delivery
+	file, err := os.Open(d.path)
+	if err != nil {
+		return 0, fmt.Errorf("open delivery: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := file.Seek(d.records, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("read delivery: %w", err)
+	}
+	reader := bufio.NewReaderSize(file, 1<<20)
+	encoded := make([]byte, base64.RawStdEncoding.EncodedLen(nonceBytes+BlobChunkBytes+16))
+	record := make([]byte, nonceBytes+BlobChunkBytes+16)
+	var written int64
+	index := uint64(0)
+	for ; written < d.Size; index++ {
+		expected := min(int64(BlobChunkBytes), d.Size-written)
+		length := nonceBytes + int(expected) + 16
+		if !readExactly(reader, recordStart(index)) {
+			return written, ErrUnlock
+		}
+		if _, err := io.ReadFull(reader, encoded[:base64.RawStdEncoding.EncodedLen(length)]); err != nil {
+			return written, ErrUnlock
+		}
+		if n, err := base64.RawStdEncoding.Decode(record, encoded[:base64.RawStdEncoding.EncodedLen(length)]); err != nil || n != length {
+			return written, ErrUnlock
+		}
+		if !readExactly(reader, recordEnd) {
+			return written, ErrUnlock
+		}
+		ciphertext := record[nonceBytes:length]
+		plaintext, err := content.Open(ciphertext[:0], record[:nonceBytes], ciphertext, blobChunkMetadata(d.id, d.Size, index, int(expected)))
+		if err != nil || int64(len(plaintext)) != expected {
+			return written, ErrUnlock
+		}
+		n, err := w.Write(plaintext)
+		clear(plaintext)
+		written += int64(n)
+		if err != nil {
+			return written, err
+		}
+	}
+	if next, _ := reader.Peek(len(recordStart(index))); string(next) == recordStart(index) {
+		return written, ErrUnlock
+	}
+	return written, nil
+}
+
+func readExactly(reader io.Reader, want string) bool {
+	got := make([]byte, len(want))
+	_, err := io.ReadFull(reader, got)
+	return err == nil && string(got) == want
 }
 
 func (u *Unlocked) writeBlob(content cipher.AEAD, w io.Writer) (int64, error) {

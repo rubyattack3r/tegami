@@ -5,19 +5,25 @@
   const chunkBytes = 4194304;
   const maxHeaderBytes = 65536;
   const maxBlobBytes = 3221225472;
-  const maxHTMLBytes = 52428800;
+  const maxHTMLBytes = 524288000;
   const maxNameBytes = 180;
   const {memory, passes, lanes} = envelopeCrypto;
-  const maxPageBytes = 134217728;
+  // An imported page's package element is found in its first MiB, as the CLI
+  // looks for it.
+  const pageHeadBytes = 1048576;
   const packagePlaceholder = "__TEGAMI_" + "PACKAGE__";
   const packageMarker = 'type="application/json">';
+  const packageElement = '<script id="tegami-package" type="application/json">';
   const magic = text.encode("TEGAMI1\0");
   const zipMagic = Uint8Array.of(0x50, 0x4b, 0x03, 0x04);
   const canStream = typeof window.showSaveFilePicker === "function";
-  // Captured before any change to the page; HTML deliveries are built from it.
-  const pristine = "<!doctype html>\n" + document.documentElement.outerHTML;
-
   const $ = (id) => document.getElementById(id);
+  const packageText = $("tegami-package").textContent.trim();
+  // Captured before any change to the page; HTML deliveries are built from it.
+  // A delivery never builds another, and serializing its records would copy
+  // them all into one string.
+  const pristine = packageText === packagePlaceholder ? "<!doctype html>\n" + document.documentElement.outerHTML : "";
+
   const decode = (value) => Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(value.length + ((4 - value.length % 4) % 4), "=")), (character) => character.charCodeAt(0));
   // A codename names a delivery by its public random ID without revealing what
   // is inside. codenames.json is shared with the Go code.
@@ -218,14 +224,13 @@
     if (bytes.length < 12 || bytes.length > 4096 || /[\r\n\0]/.test(value)) throw friendly("error.password");
     return bytes;
   };
-  const unwrap = async (data, blob, material) => {
+  const unwrap = async (data, kind, material) => {
     try {
-      return await envelopeCrypto.unwrap(data, blob, material);
+      return await envelopeCrypto.unwrap(data, kind, material);
     } catch (_) {
       throw friendly("open.wrong");
     }
   };
-  const payloadMeta = (payload) => text.encode("tegami/v1\0" + payload.id + "\0" + payload.size);
   const nameMeta = (id) => text.encode("tegami/v1\0" + id + "\0name");
   const unlockMeta = (id, type) => text.encode("tegami/v1\0" + id + "\0" + type);
   const chunkMeta = (header, index, size) => text.encode("tegami/v1\0" + header.id + "\0" + header.size + "\0" + index + "\0" + size);
@@ -235,9 +240,9 @@
     const ciphertext = new Uint8Array(await crypto.subtle.encrypt({name: "AES-GCM", iv: nonce, additionalData: nameMeta(id)}, content, envelopeCrypto.padName(name)));
     return {nonce: b64(nonce), ciphertext: b64(ciphertext)};
   };
-  const openName = async (content, data, blob = false) => {
+  const openName = async (content, data) => {
     try {
-      return await envelopeCrypto.openName(content, data, blob);
+      return await envelopeCrypto.openName(content, data);
     } catch (_) {
       throw friendly("open.damaged");
     }
@@ -459,7 +464,6 @@
   const openButton = $("open-button");
   const openStatus = $("open-status");
   const openProgress = $("open-progress");
-  const packageText = $("tegami-package").textContent.trim();
   let embeddedPayload = null;
   let sealItems = [];
   let sealSource = null;
@@ -634,42 +638,50 @@
     sealFile.focus();
   });
 
+  // An HTML delivery is the Studio's own markup with the header in its package
+  // element and each 4 MiB record in an inert element right after it, as the
+  // CLI writes them. The page is assembled as a Blob, never as one string.
   const createStandalone = async (source, material) => {
-    const plain = new Uint8Array(source.size);
-    let filled = 0;
-    for await (const piece of source.chunks()) {
-      if (filled + piece.length > plain.length) throw friendly("error.changed");
-      plain.set(piece, filled);
-      filled += piece.length;
-    }
-    if (filled !== plain.length) throw friendly("error.changed");
-    const nonce = random(12);
+    const marker = packageMarker + packagePlaceholder + "<\/script>";
+    const [before, after, ...extra] = pristine.split(marker);
+    if (after === undefined || extra.length > 0) throw friendly("error.modified");
+    const id = b64url(random(16));
+    const name = codename(id);
     const contentKey = random(32);
     const salt = random(16);
     const wrapNonce = random(12);
-    const payload = {schema: "tegami/v1", id: b64url(random(16)), size: plain.length, name: null, payload: {nonce: b64(nonce), ciphertext: ""}, unlocks: []};
+    const header = {schema: "tegami/v1", id, size: source.size, name: null, chunk_size: chunkBytes, unlock: {type: "password", salt: b64(salt), nonce: b64(wrapNonce), wrapped_key: "", memory, passes, lanes}};
+    let records = new Blob([]);
     try {
       const content = await crypto.subtle.importKey("raw", contentKey, "AES-GCM", false, ["encrypt"]);
-      const ciphertext = await crypto.subtle.encrypt({name: "AES-GCM", iv: nonce, additionalData: payloadMeta(payload)}, content, plain);
-      payload.name = await sealName(content, payload.id, source.name);
-      payload.commit = b64(await envelopeCrypto.commit(contentKey, payload.id));
+      header.name = await sealName(content, id, source.name);
+      header.commit = b64(await envelopeCrypto.commit(contentKey, id));
       const wrapping = await envelopeCrypto.derive(material, salt);
-      const wrapped = await crypto.subtle.encrypt({name: "AES-GCM", iv: wrapNonce, additionalData: unlockMeta(payload.id, "password")}, wrapping, contentKey);
-      payload.payload.ciphertext = b64(new Uint8Array(ciphertext));
-      payload.unlocks = [{type: "password", salt: b64(salt), nonce: b64(wrapNonce), wrapped_key: b64(new Uint8Array(wrapped)), memory, passes, lanes}];
+      const wrapped = await crypto.subtle.encrypt({name: "AES-GCM", iv: wrapNonce, additionalData: unlockMeta(id, "password")}, wrapping, contentKey);
+      header.unlock.wrapped_key = b64(new Uint8Array(wrapped));
+      let done = 0;
+      let index = 0;
+      for await (const plain of rechunk(source)) {
+        if (done + plain.length > source.size) throw friendly("error.changed");
+        const nonce = random(12);
+        const ciphertext = new Uint8Array(await crypto.subtle.encrypt({name: "AES-GCM", iv: nonce, additionalData: chunkMeta(header, index, plain.length)}, content, plain));
+        done += plain.length;
+        plain.fill(0);
+        const record = new Uint8Array(12 + ciphertext.length);
+        record.set(nonce);
+        record.set(ciphertext, 12);
+        records = new Blob([records, envelopeCrypto.recordStart(index), b64(record), "<\/script>"]);
+        index++;
+        meter(sealProgress, done / source.size);
+        show(sealStatus, "encryptingPercent", "", {percent: Math.floor(100 * done / source.size)});
+      }
+      if (done !== source.size) throw friendly("error.changed");
     } finally {
       contentKey.fill(0);
-      plain.fill(0);
     }
-    const marker = packageMarker + packagePlaceholder + "<\/script>";
-    if (!pristine.includes(marker)) throw friendly("error.modified");
-    const name = codename(payload.id);
-    const encoded = JSON.stringify(payload).replace(/</g, "\\u003c");
-    const html = pristine
-      .replace(marker, () => packageMarker + encoded + "<\/script>")
-      .replace("<title>Tegami</title>", () => "<title>" + escapeHTML(name) + "</title>")
-      .replace("<body>", () => '<body data-mode="envelope">');
-    download(html, name + ".html", "text/html");
+    const page = (part) => part.replace("<title>Tegami</title>", () => "<title>" + escapeHTML(name) + "</title>").replace("<body>", () => '<body data-mode="envelope">');
+    const encoded = JSON.stringify(header).replace(/</g, "\\u003c");
+    download(new Blob([page(before), packageMarker, encoded, "<\/script>", records, after]), name + ".html", "text/html");
     return {file: name + ".html", codename: name};
   };
 
@@ -793,33 +805,61 @@
       throw invalid;
     }
     try {
-      envelopeCrypto.validate(header, true);
+      envelopeCrypto.validate(header, "blob");
     } catch (_) {
       throw invalid;
     }
     return {header, offset: 12 + headerLength};
   };
 
-  // Treat HTML as a bounded UTF-8 string, never a DOM, iframe, or navigation.
-  // Match the CLI's exact package marker and parse only the JSON following it.
+  // Treat HTML as bytes, never a DOM, iframe, or navigation. Match the CLI's
+  // exact package marker, parse only the JSON following it, and read records
+  // at the positions the CLI reads them. One character per byte, so string
+  // positions are file offsets.
+  const bytesText = new TextDecoder("latin1");
+  const findPackage = (bytes) => {
+    const page = bytesText.decode(bytes);
+    const start = page.indexOf(packageElement);
+    const end = start < 0 ? -1 : page.indexOf("<\/script>", start + packageElement.length);
+    return end < 0 ? null : {json: bytes.subarray(start + packageElement.length, end), records: end + 9};
+  };
   const readDelivery = async (file) => {
     const prefix = new Uint8Array(await file.slice(0, 8).arrayBuffer());
     if (same(prefix, magic)) return {blob: true, ...await readHeader(file)};
     if (same(prefix.subarray(0, 4), zipMagic)) throw friendly("open.zipFile");
-    if (file.size > maxPageBytes) throw friendly("open.notTegami");
-    const page = new TextDecoder("utf-8", {fatal: true}).decode(await file.arrayBuffer());
-    const marker = '<script id="tegami-package" type="application/json">';
-    const start = page.indexOf(marker);
-    const end = page.indexOf("<\/script>", start + marker.length);
-    if (start < 0 || end < 0) throw friendly("open.notTegami");
+    const found = findPackage(await read(file, 0, Math.min(file.size, pageHeadBytes)));
+    if (!found) throw friendly("open.notTegami");
+    let payload;
     try {
-      const payload = JSON.parse(page.slice(start + marker.length, end));
-      envelopeCrypto.validate(payload);
-      return {blob: false, payload};
+      payload = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(found.json));
     } catch (_) {
       throw friendly("open.notTegami");
     }
+    // HTML files made by version 0.1.0 hold one payload that only their own
+    // page opens.
+    if (payload !== null && typeof payload === "object" && "unlocks" in payload) throw friendly("open.olderVersion");
+    try {
+      envelopeCrypto.validate(payload, "html");
+    } catch (_) {
+      throw friendly("open.notTegami");
+    }
+    return {blob: false, payload, records: fileRecords(file, payload, found.records)};
   };
+  // The records of an imported HTML delivery, each directly after the previous.
+  const fileRecords = (file, data, offset) => ({
+    read: async (index) => {
+      const start = envelopeCrypto.recordStart(index);
+      const length = envelopeCrypto.encodedLength(data, index);
+      const element = bytesText.decode(await read(file, offset, start.length + length + 9));
+      if (!element.startsWith(start) || !element.endsWith("<\/script>")) throw friendly("open.damaged");
+      offset += element.length;
+      return element.slice(start.length, start.length + length);
+    },
+    more: async (count) => {
+      const start = envelopeCrypto.recordStart(count);
+      return bytesText.decode(await file.slice(offset, offset + start.length).arrayBuffer()) === start;
+    },
+  });
 
   openFile.addEventListener("change", async () => {
     const file = openFile.files[0];
@@ -847,30 +887,28 @@
     }
   });
 
-  const decryptEmbedded = async (payload, material) => {
+  const decryptEmbedded = async (payload, material, records) => {
     const damaged = friendly("open.damaged");
     try {
-      envelopeCrypto.validate(payload);
+      envelopeCrypto.validate(payload, "html");
     } catch (_) {
       throw damaged;
     }
     show(openStatus, "open.decrypting");
     meter(openProgress);
-    const content = await unwrap(payload, false, material);
-    let plaintext;
+    const content = await unwrap(payload, "html", material);
+    const filename = await openName(content, payload);
+    let output;
     try {
-      plaintext = new Uint8Array(await crypto.subtle.decrypt({name: "AES-GCM", iv: decode(payload.payload.nonce), additionalData: payloadMeta(payload)}, content, decode(payload.payload.ciphertext)));
-    } catch (_) {
-      throw friendly("open.wrong");
+      output = await envelopeCrypto.openRecords(content, payload, records, (done) => {
+        meter(openProgress, done);
+        show(openStatus, "open.decryptingPercent", "", {percent: Math.floor(100 * done)});
+      });
+    } catch (error) {
+      throw error && error.friendly ? error : damaged;
     }
-    try {
-      if (plaintext.byteLength !== payload.size) throw damaged;
-      const filename = await openName(content, payload);
-      download(plaintext, filename, "application/octet-stream");
-      return ["open.downloaded", {name: filename}];
-    } finally {
-      plaintext.fill(0);
-    }
+    download(output, filename, "application/octet-stream");
+    return ["open.downloaded", {name: filename}];
   };
 
   const decryptBlob = async (file, material) => {
@@ -878,8 +916,8 @@
     const {header, offset: start} = await readHeader(file);
     show(openStatus, "open.checking");
     meter(openProgress);
-    const content = await unwrap(header, true, material);
-    const filename = await openName(content, header, true);
+    const content = await unwrap(header, "blob", material);
+    const filename = await openName(content, header);
     const handle = await showSaveFilePicker({suggestedName: filename});
     let writer = await handle.createWritable();
     try {
@@ -965,8 +1003,8 @@
     busy = true;
     openButton.disabled = true;
     try {
-      const delivery = embeddedPayload ? {blob: false, payload: embeddedPayload} : await readDelivery(file);
-      const [key, values] = delivery.blob ? await decryptBlob(file, material) : await decryptEmbedded(delivery.payload, material);
+      const delivery = embeddedPayload ? {blob: false, payload: embeddedPayload, records: envelopeCrypto.pageRecords()} : await readDelivery(file);
+      const [key, values] = delivery.blob ? await decryptBlob(file, material) : await decryptEmbedded(delivery.payload, material, delivery.records);
       show(openStatus, key, "success", values);
       openPassword.value = "";
     } catch (error) {

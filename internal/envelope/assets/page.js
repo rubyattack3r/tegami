@@ -76,12 +76,7 @@
   languageMenus.setup();
   applyLanguage(language);
 
-  const decode = (value) => {
-    const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(value.length + ((4 - value.length % 4) % 4), "=");
-    return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
-  };
   const encoded = (value) => new TextEncoder().encode(value);
-  const payloadMetadata = encoded("tegami/v1\0" + packageData.id + "\0" + packageData.size);
   reveal.addEventListener("click", () => {
     const visible = password.type === "password";
     password.type = visible ? "text" : "password";
@@ -101,12 +96,11 @@
     button.disabled = true;
     buttonLabel.textContent = t("open.decrypting");
     try {
-      const contentKey = await envelopeCrypto.unwrap(packageData, false, passwordBytes);
-      const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: decode(packageData.payload.nonce), additionalData: payloadMetadata, tagLength: 128 }, contentKey, decode(packageData.payload.ciphertext));
-      if (plaintext.byteLength !== packageData.size) throw new Error("size mismatch");
+      const contentKey = await envelopeCrypto.unwrap(packageData, "html", passwordBytes);
       // The real filename is sealed with the file and only revealed once it opens.
       const filename = await envelopeCrypto.openName(contentKey, packageData);
-      const url = URL.createObjectURL(new Blob([plaintext], { type: "application/octet-stream" }));
+      const output = await envelopeCrypto.openRecords(contentKey, packageData, envelopeCrypto.pageRecords(), (done) => show("open.decryptingPercent", {percent: Math.floor(100 * done)}));
+      const url = URL.createObjectURL(new Blob([output], { type: "application/octet-stream" }));
       const link = document.createElement("a");
       link.href = url;
       link.download = filename;

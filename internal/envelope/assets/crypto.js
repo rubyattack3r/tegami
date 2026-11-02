@@ -7,21 +7,24 @@ const envelopeCrypto = (() => {
   const passes = 3;
   const lanes = 1;
   const maxNameBytes = 180;
+  const chunkSize = 4194304;
+  // Plaintext limits of HTML deliveries and .tegami files.
+  const limits = {html: 524288000, blob: 3221225472};
   // SHA-256 of argon2.wasm, inserted when the page is assembled. This script is
   // pinned by the page's CSP hash, so the module it runs is pinned too.
   const wasmSHA256 = "__TEGAMI_ARGON2_SHA256__";
   const decode = (value) => {
     if (typeof value !== "string" || !/^[A-Za-z0-9+/]*$/.test(value) || value.length % 4 === 1) throw new Error("encoding");
-    return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    return bytes;
   };
   const bytesOf = (value, length) => {
     const bytes = decode(value);
     if (bytes.length !== length) throw new Error("length");
     return bytes;
   };
-  // Checks an encoded length without decoding, for payloads of up to 50 MiB.
-  // Their characters are checked when they are decoded for decryption.
-  const encodesLength = (value, length) => typeof value === "string" && value.length === Math.ceil(length * 4 / 3);
   const validSlot = (slot) => !!slot && slot.type === "password" && slot.memory === memory && slot.passes === passes && slot.lanes === lanes;
   const validName = (name) => typeof name === "string" && name !== "" && name !== "." && name !== ".." && !/[\/\\\0\r\n]/.test(name) && text.encode(name).length <= maxNameBytes && (!name.isWellFormed || name.isWellFormed());
   const sealed = (value, length) => {
@@ -29,21 +32,16 @@ const envelopeCrypto = (() => {
     bytesOf(value.nonce, 12);
     return bytesOf(value.ciphertext, length);
   };
-  const validate = (data, blob = false) => {
-    const slot = blob ? data && data.unlock : data && Array.isArray(data.unlocks) && data.unlocks.length === 1 && data.unlocks[0];
-    if (!data || data.schema !== "tegami/v1" || typeof data.id !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(data.id) || !Number.isSafeInteger(data.size) || data.size < 1 || data.size > (blob ? 3221225472 : 52428800) || !validSlot(slot)) throw new Error("metadata");
+  // Validates the header of an HTML delivery ("html") or .tegami file ("blob").
+  const validate = (data, kind) => {
+    const slot = data && data.unlock;
+    if (!data || !Object.hasOwn(limits, kind) || data.schema !== "tegami/v1" || typeof data.id !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(data.id) || !Number.isSafeInteger(data.size) || data.size < 1 || data.size > limits[kind] || !validSlot(slot)) throw new Error("metadata");
     bytesOf(slot.salt, 16);
     bytesOf(slot.nonce, 12);
     bytesOf(slot.wrapped_key, 48);
     bytesOf(data.commit, 32);
     sealed(data.name, maxNameBytes + 16);
-    if (blob) {
-      if (data.chunk_size !== 4194304) throw new Error("chunk size");
-    } else {
-      if (!data.payload) throw new Error("payload");
-      bytesOf(data.payload.nonce, 12);
-      if (!encodesLength(data.payload.ciphertext, data.size + 16)) throw new Error("payload length");
-    }
+    if (data.chunk_size !== chunkSize) throw new Error("chunk size");
     return slot;
   };
   let module;
@@ -83,8 +81,8 @@ const envelopeCrypto = (() => {
     return new Uint8Array(await crypto.subtle.sign("HMAC", key, commitMeta(id)));
   };
   // Unwraps the content key and accepts it only if the delivery commits to it.
-  const unwrap = async (data, blob, material) => {
-    const slot = validate(data, blob);
+  const unwrap = async (data, kind, material) => {
+    const slot = validate(data, kind);
     const wrapping = await derive(material, bytesOf(slot.salt, 16));
     const raw = new Uint8Array(await crypto.subtle.decrypt({name: "AES-GCM", iv: bytesOf(slot.nonce, 12), additionalData: text.encode("tegami/v1\0" + data.id + "\0password")}, wrapping, bytesOf(slot.wrapped_key, 48)));
     try {
@@ -115,5 +113,56 @@ const envelopeCrypto = (() => {
       raw.fill(0);
     }
   };
-  return {memory, passes, lanes, validate, derive, commit, unwrap, padName, openName};
+  // An HTML delivery carries the records of a .tegami file, each in an inert
+  // element right after the package element: the nonce and ciphertext in
+  // Base64 without padding.
+  const recordStart = (index) => '\n<script id="tegami-r' + index + '" type="application/octet-stream">';
+  const recordCount = (data) => Math.ceil(data.size / chunkSize);
+  const plainLength = (data, index) => Math.min(chunkSize, data.size - index * chunkSize);
+  const encodedLength = (data, index) => Math.ceil((12 + plainLength(data, index) + 16) * 4 / 3);
+  const openRecord = async (key, data, index, encoded) => {
+    const expected = plainLength(data, index);
+    if (typeof encoded !== "string" || encoded.length !== encodedLength(data, index)) throw new Error("record length");
+    const record = decode(encoded);
+    if (record.length !== 12 + expected + 16) throw new Error("record length");
+    const plain = new Uint8Array(await crypto.subtle.decrypt({name: "AES-GCM", iv: record.subarray(0, 12), additionalData: text.encode("tegami/v1\0" + data.id + "\0" + data.size + "\0" + index + "\0" + expected)}, key, record.subarray(12)));
+    if (plain.length !== expected) throw new Error("record length");
+    return plain;
+  };
+  // Decrypts every record into a Blob, so no output exists unless all of them
+  // open. source.read(index) returns a record's Base64 text, and
+  // source.more(count) reports whether another record follows the last.
+  const openRecords = async (key, data, source, progress) => {
+    const count = recordCount(data);
+    let output = new Blob([]);
+    for (let index = 0; index < count; index++) {
+      const plain = await openRecord(key, data, index, await source.read(index));
+      output = new Blob([output, plain]);
+      plain.fill(0);
+      progress((index + 1) / count);
+    }
+    if (await source.more(count)) throw new Error("trailing record");
+    return output;
+  };
+  // This page's own records, read in the same positions as the CLI reads
+  // them: each directly after the package element or the previous record,
+  // separated by one line break.
+  const pageRecords = () => {
+    let previous = document.getElementById("tegami-package");
+    const next = (index) => {
+      const separator = previous && previous.nextSibling;
+      const element = separator && separator.nodeType === Node.TEXT_NODE && separator.data === "\n" ? separator.nextSibling : null;
+      return element && element.id === "tegami-r" + index && element.localName === "script" && element.getAttribute("type") === "application/octet-stream" ? element : null;
+    };
+    return {
+      read: (index) => {
+        const element = next(index);
+        if (!element) throw new Error("record");
+        previous = element;
+        return element.textContent;
+      },
+      more: (count) => next(count) !== null,
+    };
+  };
+  return {memory, passes, lanes, chunkSize, limits, validate, derive, commit, unwrap, padName, openName, recordStart, encodedLength, openRecords, pageRecords};
 })();

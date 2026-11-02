@@ -62,6 +62,11 @@ For a delivery from someone you don't trust, open your own verified
 sender's page. Get the Studio or the CLI from a trusted source, never from the
 same sender.
 
+HTML files made with version 0.1.0 open only in their own page or in 0.1.0
+itself. For one from someone you don't trust, use `tegami.html` or
+`tegami open` from the [0.1.0
+release](https://github.com/rubyattack3r/tegami/releases/tag/v0.1.0).
+
 ## Codenames
 
 Each delivery has a codename such as `quiet-harbor`, derived from its random
@@ -81,7 +86,7 @@ it as a password or as a reason to trust a file.
 | Key derivation | Argon2id v1.3, 64 MiB, 3 passes, 1 lane, 16-byte random salt |
 | Key commitment | HMAC-SHA256, checked before anything is decrypted |
 | Filename | Padded to 180 bytes, then encrypted with the content key |
-| Streaming chunks | 4 MiB, each bound to its position in the file |
+| Chunks | 4 MiB in HTML and Tegami files, each bound to its position in the file |
 
 Every encrypted value is bound to the delivery's schema and ID. Readers accept
 only the Argon2id settings above and reject any other before doing any work,

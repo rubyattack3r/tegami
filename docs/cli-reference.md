@@ -36,7 +36,7 @@ because standard output carries the delivery.
 
 | Format | Output | Input size | Opened with |
 | --- | --- | --- | --- |
-| `html` | One self-contained HTML page | 1 byte to 50 MiB | Any browser |
+| `html` | One self-contained HTML page | 1 byte to 500 MiB | Any browser |
 | `blob` | Streaming `.tegami` file | 1 byte to 3 GiB | The Studio in a Chromium-based browser |
 
 Both can also be opened with `tegami open`. If a mail system blocks HTML

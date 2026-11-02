@@ -5,6 +5,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **HTML deliveries hold up to 500 MiB**, up from 50 MiB, and still open in
+  any modern browser, though Safari can take a long time to load large ones.
+  Pages are opened in 4 MiB pieces with a progress percentage, so large files
+  no longer freeze the page while they open.
+  HTML files made now don't open in the 0.1.0 Studio or CLI.
+- **Japanese pages read more naturally**, rewritten from Japanese rather than
+  following the English sentence by sentence.
+- The Studio notes that Safari can be slow to load large HTML files.
+
+### Removed
+
+- `tegami open` and the Studio's Open tab no longer open HTML files made with
+  0.1.0, and say so when given one. Those files still open on their own in a
+  browser, or with the 0.1.0 Studio or CLI.
+
 ## [0.1.0] - 2026-10-18
 
 ### Added
