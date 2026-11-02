@@ -6,10 +6,10 @@ and wrap the key with a key derived from the password.
 
 | Container | Used by | Max plaintext | Structure |
 | --- | --- | --- | --- |
-| Envelope | `html` deliveries | 50 MiB | JSON embedded in an HTML page |
+| Page | `html` deliveries | 500 MiB | Header JSON and 4 MiB encrypted records in an HTML page |
 | Blob | `blob` deliveries (`.tegami`) | 3 GiB | Binary header followed by 4 MiB encrypted records |
 
-Tegami reads and writes `tegami/v1` only.
+Tegami reads `tegami/v1` only.
 
 Conventions used below:
 
@@ -48,7 +48,7 @@ values other than those above before allocating memory or deriving a key.
 
 ## Content-key commitment
 
-Every envelope and blob header includes a `commit` field:
+Every package and blob header includes a `commit` field:
 
 `b64(HMAC-SHA256(content_key, tegami/v1 ‖ id ‖ commit))`.
 
@@ -65,8 +65,7 @@ GCM's authentication alone does not.
 | --- | --- | --- |
 | Wrap content key | wrapping key | `tegami/v1 ‖ id ‖ password` |
 | Seal filename | content key | `tegami/v1 ‖ id ‖ name` |
-| Encrypt envelope payload | content key | `tegami/v1 ‖ id ‖ size` |
-| Encrypt blob chunk `i` | content key | `tegami/v1 ‖ id ‖ size ‖ i ‖ plaintext_len_i` |
+| Encrypt chunk `i` of a page or blob | content key | `tegami/v1 ‖ id ‖ size ‖ i ‖ plaintext_len_i` |
 
 The filename is UTF-8, up to 180 bytes, without `/`, `\`, CR, LF, or NUL.
 It must be nonempty and cannot be `.` or `..`. Append NUL bytes on the right
@@ -75,40 +74,6 @@ to make exactly 180 bytes before sealing. The resulting ciphertext is always
 remove only trailing NUL bytes, and reject embedded NULs, invalid UTF-8, or
 anything that violates the filename rule. A name of exactly 180 bytes has no
 padding.
-
-## Envelope
-
-The envelope is a JSON object stored in a
-`<script id="tegami-package" type="application/json">` element.
-
-```json
-{
-  "schema": "tegami/v1",
-  "id": "<b64url, 16 random bytes>",
-  "size": 182044,
-  "commit": "<b64, 32-byte HMAC>",
-  "name": {"nonce": "<b64, 12 bytes>", "ciphertext": "<b64>"},
-  "payload": {"nonce": "<b64, 12 bytes>", "ciphertext": "<b64>"},
-  "unlocks": [
-    {
-      "type": "password",
-      "salt": "<b64, 16 bytes>",
-      "nonce": "<b64, 12 bytes>",
-      "wrapped_key": "<b64, 32-byte key + 16-byte tag>",
-      "memory": 65536,
-      "passes": 3,
-      "lanes": 1
-    }
-  ]
-}
-```
-
-`unlocks` currently contains exactly one slot.
-
-Readers outside the page, the Studio's Open tab and `tegami open`, read at
-most 128 MiB of HTML as UTF-8 text, find the exact package marker shown above,
-and parse only the JSON up to the first closing script tag. They never run,
-render, or insert the sender's markup. The plaintext limit is still 50 MiB.
 
 ## Blob
 
@@ -168,3 +133,51 @@ No output is published until every record and the trailing-data check pass.
 The CLI decrypts to a private temporary file before renaming it or copying it
 to stdout. The Studio closes its save transaction only on success and aborts
 it on failure, including damage to the last record.
+
+## Page
+
+A page is an HTML delivery that carries a blob's header and records. The
+header JSON, exactly as in a blob, is the content of the package element, and
+each record follows it in its own inert element:
+
+```text
+<script id="tegami-package" type="application/json">HEADER</script>
+<script id="tegami-r0" type="application/octet-stream">RECORD 0</script>
+<script id="tegami-r1" type="application/octet-stream">RECORD 1</script>
+...
+<script id="tegami-rN-1" type="application/octet-stream">RECORD N-1</script>
+```
+
+Each record element starts with a single LF (`0x0A`) and directly follows the
+previous element's closing `</script>`, the package element's for record 0.
+Its content is `b64(nonce ‖ ciphertext)` for chunk `i`, encrypted exactly as a
+blob chunk, so it is `ceil((12 + plaintext_len_i + 16) × 4 / 3)` characters.
+The rest of the page follows the last record.
+
+Readers must reject a page when:
+
+- the header fails any of the blob's header checks, or `size` is outside
+  1 byte to 500 MiB;
+- a record element is missing, out of order, separated from the previous one
+  by anything but one LF, or has the wrong length;
+- any record fails to authenticate or decrypts to an unexpected length;
+- an element for record `N` follows the last record.
+
+`tegami open` and the Studio's Open tab check these at the exact byte
+offsets. A delivery page opening itself checks the same positions in its
+document: each record element is the next sibling after a text node holding
+one LF. No output is published until every record passes; the pages assemble
+the file as a `Blob` and offer it as a download only then.
+
+## Finding the package
+
+Readers outside the page, the Studio's Open tab and `tegami open`, treat HTML
+as bytes. They look for the exact package marker shown above in the first
+MiB of the file and parse only the JSON up to the first closing `</script>`
+after it. They never run, render, or insert the sender's markup.
+
+Version 0.1.0 wrote HTML deliveries with a different package: one JSON object
+with a single `payload` and an `unlocks` array, specified in [the 0.1.0
+formats](https://github.com/rubyattack3r/tegami/blob/v0.1.0/docs/formats.md).
+Those files open only in their own page. Readers outside it reject them and
+say so.

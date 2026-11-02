@@ -1,6 +1,7 @@
 package envelope
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
@@ -18,7 +19,8 @@ import (
 )
 
 const (
-	MaximumInputBytes    = 50 << 20
+	// MaximumInputBytes is the largest file an HTML delivery holds.
+	MaximumInputBytes    = 500 << 20
 	MinimumPasswordBytes = 12
 	MaximumPasswordBytes = 4096
 	keyBytes             = 32
@@ -56,19 +58,6 @@ type unlockSlot struct {
 	Lanes      int    `json:"lanes"`
 }
 
-// packageData is the tegami/v1 envelope. The filename is sealed in Name with
-// the content key; only the codename and size are visible.
-type packageData struct {
-	Schema   string           `json:"schema"`
-	ID       string           `json:"id"`
-	Size     int64            `json:"size"`
-	Name     encryptedPayload `json:"name"`
-	Payload  encryptedPayload `json:"payload"`
-	Unlocks  []unlockSlot     `json:"unlocks"`
-	Commit   string           `json:"commit"`
-	codename string
-}
-
 type pageData struct {
 	Codename     string
 	Size         string
@@ -77,107 +66,70 @@ type pageData struct {
 	Action       string
 }
 
-// PackHTML writes a single-page HTML delivery and returns its codename.
+// PackHTML writes a self-contained HTML delivery and returns its codename. The
+// page carries the records of a .tegami file, each in its own inert element
+// after the header, so browsers can open it one record at a time.
 func PackHTML(inputPath, outputPath string, password []byte) (string, error) {
-	data, err := packageInput(inputPath, password)
+	input, err := openChunkedInput(inputPath, password, MaximumInputBytes, fmt.Sprintf("input is larger than %d MiB, the limit for html; use --format blob for files up to %d GiB", MaximumInputBytes>>20, MaximumBlobInputBytes>>30))
 	if err != nil {
 		return "", err
 	}
-	page, err := renderPage(data)
+	defer input.close()
+	header, err := json.Marshal(input.header)
+	if err != nil {
+		return "", fmt.Errorf("encode package: %w", err)
+	}
+	page, err := renderPage(input.codename, input.header.Size, header)
 	if err != nil {
 		return "", err
 	}
-	return data.codename, writeOutput(outputPath, page)
+	_, records, ok := findPackage(page)
+	if !ok {
+		return "", errors.New("render output: package element not found")
+	}
+	return input.codename, writeAtomically(outputPath, func(w io.Writer) error {
+		if _, err := w.Write(page[:records]); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
+		err := input.encrypt(func(index uint64, nonce, ciphertext []byte) error {
+			if _, err := io.WriteString(w, recordStart(index)); err != nil {
+				return err
+			}
+			encoder := base64.NewEncoder(base64.RawStdEncoding, w)
+			if _, err := encoder.Write(nonce); err != nil {
+				return err
+			}
+			if _, err := encoder.Write(ciphertext); err != nil {
+				return err
+			}
+			if err := encoder.Close(); err != nil {
+				return err
+			}
+			_, err := io.WriteString(w, recordEnd)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(page[records:]); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
+		return nil
+	})
 }
+
+// recordStart opens the element holding record index of an HTML delivery.
+// Records follow the package element directly and in order; each holds the
+// record's nonce and ciphertext in Base64 without padding.
+func recordStart(index uint64) string {
+	return fmt.Sprintf("\n<script id=\"tegami-r%d\" type=\"application/octet-stream\">", index)
+}
+
+const recordEnd = "</script>"
 
 // PackBlob writes a streaming .tegami delivery and returns its codename.
 func PackBlob(inputPath, outputPath string, password []byte) (string, error) {
 	return packStreamingBlob(inputPath, outputPath, password)
-}
-
-func packageInput(inputPath string, password []byte) (packageData, error) {
-	if err := validatePassword(password); err != nil {
-		return packageData{}, err
-	}
-	input, err := os.Open(inputPath)
-	if err != nil {
-		return packageData{}, fmt.Errorf("open input: %w", err)
-	}
-	defer func() { _ = input.Close() }()
-	info, err := input.Stat()
-	if err != nil {
-		return packageData{}, fmt.Errorf("inspect input: %w", err)
-	}
-	switch {
-	case !info.Mode().IsRegular():
-		return packageData{}, errors.New("input must be a regular file; archive folders first, for example with tar or zip")
-	case info.Size() < 1:
-		return packageData{}, errors.New("input is empty; there is nothing to encrypt")
-	case info.Size() > MaximumInputBytes:
-		return packageData{}, fmt.Errorf("input is larger than %d MiB, the limit for html; use --format blob for files up to %d GiB", MaximumInputBytes>>20, MaximumBlobInputBytes>>30)
-	}
-	plaintext, err := io.ReadAll(io.LimitReader(input, MaximumInputBytes+1))
-	defer clear(plaintext)
-	if err != nil {
-		return packageData{}, fmt.Errorf("read input: %w", err)
-	}
-	filename, err := portableFilename(filepath.Base(inputPath))
-	if err != nil {
-		return packageData{}, err
-	}
-	data, err := seal(filename, plaintext, password)
-	if err != nil {
-		return packageData{}, err
-	}
-	return data, nil
-}
-
-func seal(filename string, plaintext []byte, password []byte) (packageData, error) {
-	id := make([]byte, idBytes)
-	payloadNonce := make([]byte, nonceBytes)
-	contentKey := make([]byte, keyBytes)
-	if _, err := io.ReadFull(rand.Reader, id); err != nil {
-		return packageData{}, fmt.Errorf("generate envelope ID: %w", err)
-	}
-	if _, err := io.ReadFull(rand.Reader, payloadNonce); err != nil {
-		return packageData{}, fmt.Errorf("generate payload nonce: %w", err)
-	}
-	if _, err := io.ReadFull(rand.Reader, contentKey); err != nil {
-		return packageData{}, fmt.Errorf("generate content key: %w", err)
-	}
-	defer clear(contentKey)
-
-	envelopeID := base64.RawURLEncoding.EncodeToString(id)
-	payloadCipher, err := newGCM(contentKey)
-	if err != nil {
-		return packageData{}, err
-	}
-	payloadCiphertext := payloadCipher.Seal(nil, payloadNonce, plaintext, payloadMetadata(envelopeID, int64(len(plaintext))))
-	name, err := sealName(payloadCipher, envelopeID, filename)
-	if err != nil {
-		return packageData{}, err
-	}
-	codename, err := Codename(envelopeID)
-	if err != nil {
-		return packageData{}, err
-	}
-	slot, err := wrapContentKey(envelopeID, contentKey, password)
-	if err != nil {
-		return packageData{}, err
-	}
-	return packageData{
-		Schema: schemaV1,
-		ID:     envelopeID,
-		Size:   int64(len(plaintext)),
-		Name:   name,
-		Payload: encryptedPayload{
-			Nonce:      base64.RawStdEncoding.EncodeToString(payloadNonce),
-			Ciphertext: base64.RawStdEncoding.EncodeToString(payloadCiphertext),
-		},
-		Unlocks:  []unlockSlot{slot},
-		Commit:   encodeCommitment(contentKey, envelopeID),
-		codename: codename,
-	}, nil
 }
 
 func wrapContentKey(envelopeID string, contentKey []byte, password []byte) (unlockSlot, error) {
@@ -207,15 +159,12 @@ func wrapContentKey(envelopeID string, contentKey []byte, password []byte) (unlo
 	}, nil
 }
 
-func renderPage(data packageData) ([]byte, error) {
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		return nil, fmt.Errorf("encode package: %w", err)
-	}
+// renderPage renders the CLI delivery page around the package JSON.
+func renderPage(codename string, size int64, packageJSON []byte) ([]byte, error) {
 	view := pageData{
-		Codename: data.codename,
-		Size:     humanSize(data.Size),
-		Package:  template.JS(encoded),
+		Codename: codename,
+		Size:     humanSize(size),
+		Package:  template.JS(packageJSON),
 	}
 	// The page is rendered in English; its script switches to the reader's
 	// language from the embedded catalogs.
@@ -229,6 +178,17 @@ func renderPage(data packageData) ([]byte, error) {
 }
 
 func writeOutput(outputPath string, content []byte) error {
+	return writeAtomically(outputPath, func(w io.Writer) error {
+		if _, err := w.Write(content); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
+		return nil
+	})
+}
+
+// writeAtomically writes an output through a private temporary file and
+// renames it into place only once write succeeds.
+func writeAtomically(outputPath string, write func(io.Writer) error) error {
 	temporary, err := os.CreateTemp(filepath.Dir(outputPath), ".tegami-*")
 	if err != nil {
 		return fmt.Errorf("create output: %w", err)
@@ -241,7 +201,11 @@ func writeOutput(outputPath string, content []byte) error {
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	if _, err := temporary.Write(content); err != nil {
+	buffered := bufio.NewWriterSize(temporary, 1<<20)
+	if err := write(buffered); err != nil {
+		return err
+	}
+	if err := buffered.Flush(); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
@@ -272,10 +236,6 @@ func portableFilename(name string) (string, error) {
 		return "", fmt.Errorf("input filename must be 1 to %d bytes of UTF-8 without /, \\, or line breaks; rename the file", maxNameBytes)
 	}
 	return name, nil
-}
-
-func payloadMetadata(envelopeID string, size int64) []byte {
-	return []byte(fmt.Sprintf("%s\x00%s\x00%d", schemaV1, envelopeID, size))
 }
 
 func nameMetadata(envelopeID string) []byte {

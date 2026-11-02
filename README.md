@@ -32,7 +32,7 @@ changes it.
 
 | Format | Best for | Size limit | Recipient needs |
 | --- | --- | --- | --- |
-| **HTML file** | Most deliveries; one file to attach | 50 MiB | Any modern browser |
+| **HTML file** | Most deliveries; one file to attach | 500 MiB | Any modern browser |
 | **Tegami file** (`.tegami`) | Large files | 3 GiB | A trusted copy of `tegami.html` and a Chromium-based browser (Chrome, Edge, Brave) |
 
 ## Command line

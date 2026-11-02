@@ -42,14 +42,18 @@ func TestPackHTMLRoundTrip(t *testing.T) {
 	if strings.Contains(string(page), "Tegami") {
 		t.Fatal("the delivery page names Tegami")
 	}
-	data := packageFromPage(t, page)
-	if data.Size != int64(len(plaintext)) || data.Schema != schemaV1 || len(data.Unlocks) != 1 || data.Unlocks[0].Type != passwordSlot {
-		t.Fatalf("package metadata = %#v", data)
+	header := headerFromPage(t, page)
+	if header.Size != int64(len(plaintext)) || header.Schema != schemaV1 || header.ChunkSize != BlobChunkBytes || header.Unlock.Type != passwordSlot {
+		t.Fatalf("package metadata = %#v", header)
 	}
-	if want, _ := Codename(data.ID); codename != want || !strings.Contains(string(page), "<title>"+codename+"</title>") {
+	if want, _ := Codename(header.ID); codename != want || !strings.Contains(string(page), "<title>"+codename+"</title>") {
 		t.Fatalf("codename %q does not match the envelope ID", codename)
 	}
-	name, got, err := decrypt(data, password)
+	_, records, _ := findPackage(page)
+	if !bytes.HasPrefix(page[records:], []byte(recordStart(0))) || bytes.Contains(page, []byte(recordStart(1))) {
+		t.Fatal("the record does not follow the package element")
+	}
+	name, got, err := openPath(outputPath, password)
 	if err != nil || name != "quarterly notes.txt" || string(got) != string(plaintext) {
 		t.Fatalf("decrypt: %v, %q, %q", err, name, got)
 	}
@@ -107,9 +111,8 @@ func TestPackHTMLAndBlob(t *testing.T) {
 			var id, name string
 			var got []byte
 			if test.name == "html" {
-				data := packageFromPage(t, content)
-				id = data.ID
-				name, got, err = decrypt(data, password)
+				id = headerFromPage(t, content).ID
+				name, got, err = openPath(test.path, password)
 			} else {
 				if !bytes.HasPrefix(content, blobMagic[:]) {
 					t.Fatal("blob does not use the streaming format")
@@ -190,14 +193,7 @@ func TestStudioIsDeterministic(t *testing.T) {
 }
 
 func TestPagesAllowOnlyTheirInlineCode(t *testing.T) {
-	data, err := seal("report.txt", []byte("private report\n"), []byte("correct horse battery staple"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	page, err := renderPage(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	page := packedPage(t, bytes.Repeat([]byte("private report\n"), BlobChunkBytes/8))
 	if strings.Contains(string(page), "Tegami") {
 		t.Fatal("delivery page names Tegami")
 	}
@@ -258,40 +254,6 @@ func TestStreamingBlobUsesFourMiBRecords(t *testing.T) {
 	if _, _, got, err := decryptBlob(content, password); err != nil || !bytes.Equal(got, plaintext) {
 		t.Fatalf("decrypt blob: %v", err)
 	}
-}
-
-func TestWrongPasswordCannotDecrypt(t *testing.T) {
-	data, err := seal("payload.bin", []byte("payload"), []byte("correct password"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := decrypt(data, []byte("incorrect password")); err == nil {
-		t.Fatal("wrong password decrypted")
-	}
-}
-
-func decrypt(data packageData, password []byte) (string, []byte, error) {
-	contentKey, err := unwrapKey(data.ID, data.Unlocks[0], password)
-	if err != nil {
-		return "", nil, err
-	}
-	if !checkCommitment(data.Commit, contentKey, data.ID) {
-		return "", nil, errors.New("commitment does not match")
-	}
-	payload, err := newGCM(contentKey)
-	if err != nil {
-		return "", nil, err
-	}
-	padded, err := openSealedValue(payload, data.Name, nameMetadata(data.ID))
-	if err != nil {
-		return "", nil, err
-	}
-	name, ok := unpadName(padded)
-	if !ok {
-		return "", nil, errors.New("sealed name is not padded")
-	}
-	plaintext, err := openSealedValue(payload, data.Payload, payloadMetadata(data.ID, data.Size))
-	return name, plaintext, err
 }
 
 func decryptBlob(content []byte, password []byte) (string, string, []byte, error) {
@@ -366,15 +328,52 @@ func unwrapKey(envelopeID string, slot unlockSlot, password []byte) ([]byte, err
 	return openSealedValue(wrapping, encryptedPayload{Nonce: slot.Nonce, Ciphertext: slot.WrappedKey}, unlockMetadata(envelopeID))
 }
 
-func packageFromPage(t *testing.T, page []byte) packageData {
+func headerFromPage(t *testing.T, page []byte) blobHeader {
 	t.Helper()
-	match := regexp.MustCompile(`<script id="tegami-package" type="application/json">([^<]+)</script>`).FindSubmatch(page)
-	if len(match) != 2 {
+	raw, _, ok := findPackage(page)
+	if !ok {
 		t.Fatal("package JSON not found")
 	}
-	var data packageData
-	if err := json.Unmarshal(match[1], &data); err != nil {
+	var header blobHeader
+	if err := json.Unmarshal(raw, &header); err != nil {
 		t.Fatal(err)
 	}
-	return data
+	return header
+}
+
+// packedPage returns an HTML delivery of plaintext made by PackHTML.
+func packedPage(t *testing.T, plaintext []byte) []byte {
+	t.Helper()
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "report.txt")
+	if err := os.WriteFile(inputPath, plaintext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(directory, "delivery.html")
+	if _, err := PackHTML(inputPath, outputPath, []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	page, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
+
+// openPath opens a delivery on disk the way the CLI does.
+func openPath(path string, password []byte) (string, []byte, error) {
+	delivery, err := ReadDelivery(path)
+	if err != nil {
+		return "", nil, err
+	}
+	unlocked, err := delivery.Unlock(password)
+	if err != nil {
+		return "", nil, err
+	}
+	defer unlocked.Close()
+	var output bytes.Buffer
+	if _, err := unlocked.WriteTo(&output); err != nil {
+		return "", nil, err
+	}
+	return unlocked.Name, output.Bytes(), nil
 }

@@ -129,16 +129,15 @@ func fixtures(directory string, done chan<- report) (http.Handler, error) {
 	if err := os.WriteFile(large, bytes.Repeat([]byte{42}, envelope.BlobChunkBytes+7), 0o600); err != nil {
 		return nil, err
 	}
-	for _, format := range []string{"html", "blob"} {
-		name := "cli.html"
-		source := input
-		if format == "blob" {
-			name, source = "cli.tegami", large
-		}
-		command := exec.Command("./bin/tegami", "pack", "--input", source, "--output", filepath.Join(directory, name), "--format", format)
+	for _, fixture := range []struct{ name, source, format string }{
+		{"cli.html", input, "html"},
+		{"cli-large.html", large, "html"},
+		{"cli.tegami", large, "blob"},
+	} {
+		command := exec.Command("./bin/tegami", "pack", "--input", fixture.source, "--output", filepath.Join(directory, fixture.name), "--format", fixture.format)
 		command.Stdin = strings.NewReader(password)
 		if output, err := command.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("create %s fixture: %w: %s", format, err, output)
+			return nil, fmt.Errorf("create %s fixture: %w: %s", fixture.name, err, output)
 		}
 	}
 	if err := envelope.WriteStudio(filepath.Join(directory, "tegami.html")); err != nil {
@@ -174,7 +173,7 @@ func fixtures(directory string, done chan<- report) (http.Handler, error) {
 // atomic-output path. The password is supplied through stdin, never arguments.
 func checkResult(directory string, r *http.Request) error {
 	kind := r.PathValue("kind")
-	if kind != "html" && kind != "blob" && kind != "zip" {
+	if kind != "html" && kind != "large-html" && kind != "blob" && kind != "zip" {
 		return fmt.Errorf("unknown test")
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
@@ -218,7 +217,7 @@ func checkResult(directory string, r *http.Request) error {
 		}
 	} else {
 		want := []byte(message)
-		if kind == "blob" {
+		if kind == "blob" || kind == "large-html" {
 			want = bytes.Repeat([]byte{42}, envelope.BlobChunkBytes+7)
 		}
 		if sha256.Sum256(output.Bytes()) != sha256.Sum256(want) {
@@ -235,7 +234,7 @@ func checkResult(directory string, r *http.Request) error {
 	if err := json.Unmarshal(metadata, &result); err != nil {
 		return err
 	}
-	wantName := map[string]string{"html": "報告書.txt", "blob": "footage.bin", "zip": "files.zip"}[kind]
+	wantName := map[string]string{"html": "報告書.txt", "large-html": "footage.bin", "blob": "footage.bin", "zip": "files.zip"}[kind]
 	if result.Name != wantName {
 		return fmt.Errorf("filename = %q, want %q", result.Name, wantName)
 	}

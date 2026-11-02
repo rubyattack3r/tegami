@@ -43,14 +43,7 @@ func TestPagesUseKnownKeys(t *testing.T) {
 }
 
 func TestDeliveryPageCarriesItsText(t *testing.T) {
-	data, err := seal("report.txt", []byte("report\n"), []byte("correct horse battery staple"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	page, err := renderPage(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	page := packedPage(t, []byte("report\n"))
 	catalog := regexp.MustCompile(`<script id="tegami-i18n" type="application/json">([^<]*)</script>`).FindSubmatch(page)
 	if len(catalog) != 2 {
 		t.Fatal("delivery page has no catalog")

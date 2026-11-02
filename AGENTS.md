@@ -1,7 +1,7 @@
 # AGENTS.md — Tegami
 
 Tegami encrypts files into deliveries that open offline in a browser: a
-self-contained HTML page (up to 50 MiB) or a streaming `.tegami` blob (up to
+self-contained HTML page (up to 500 MiB) or a streaming `.tegami` blob (up to
 3 GiB) opened with the Studio, `tegami.html`. Both use the `tegami/v1` schema.
 The Go CLI and the browser pages implement the same formats.
 
@@ -14,8 +14,9 @@ The Go CLI and the browser pages implement the same formats.
   additional authenticated data, a limit, or the filename rule lands in
   `internal/envelope/*.go` and `assets/*.js` together, with a round-trip test,
   and in `docs/formats.md`. Never weaken a check on one side only.
-- Keep the formats stable. Existing deliveries must keep opening; a breaking
-  change needs a new schema version.
+- Keep the formats stable. Existing deliveries must keep opening: `.tegami`
+  files in the Studio and the CLI, HTML files at least in their own page. A
+  breaking change needs a new schema version.
 - Filenames stay hidden until a delivery is unlocked. Before that, a delivery
   is known only by its codename and size. Don't add visible metadata, and
   don't name generated files after their contents.
@@ -59,6 +60,11 @@ The Go CLI and the browser pages implement the same formats.
   `pristine` before the script changes anything, with the package embedded
   and `body[data-mode=envelope]` set. Anything the script changes later
   (theme, selection) must not leak into deliveries.
+- An HTML delivery holds its header in the package element and each 4 MiB
+  record in its own inert element after it. Read, decrypt, and build them one
+  record at a time, as Blobs, never as one string: a 500 MiB delivery is
+  about 700 MB of page. A delivery page never serializes itself, so
+  `pristine` is captured only in the Studio.
 - Icons are [Hugeicons](https://hugeicons.com) (MIT) in an inline `<symbol>`
   sprite, referenced with `<use href="#i-NAME"/>`. Add icons with
   `go run ./scripts/icons`, keep the `<desc>` credit in the sprite, and keep

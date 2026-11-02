@@ -18,11 +18,11 @@ create it with `tegami studio`.
    named `files.zip` or after the folder.
 3. Choose a **Format**:
    - **HTML file** saves `<codename>.html`, which opens in any modern browser.
-     Up to 50 MiB.
+     Up to 500 MiB.
    - **Tegami file** asks where to save `<codename>.tegami`. Up to 3 GiB, and
      needs a Chromium-based browser on both ends.
 
-   The Studio switches to Tegami file when the selection is over 50 MiB.
+   The Studio switches to Tegami file when the selection is over 500 MiB.
 4. A strong **Password** is filled in for you. Copy it, select **Generate**
    for another, or type your own of at least 12 characters. The strength bar
    is only a rough guide, so the generated password is the safe choice.
@@ -90,8 +90,9 @@ Both choices are remembered in this browser.
 
 ## Limits
 
-- **Size**: up to 50 MiB for an HTML file and 3 GiB for a Tegami file. For
-  several files, the limit applies to the ZIP.
+- **Size**: up to 500 MiB for an HTML file and 3 GiB for a Tegami file. For
+  several files, the limit applies to the ZIP. Large HTML files are meant for
+  computers; a phone or tablet may not have the memory to open one.
 - **Files**: up to 65,535 in one delivery. System files such as `.DS_Store`
   and `Thumbs.db` are left out.
 - **Filename**: up to 180 bytes, without `/`, `\`, or line breaks. The CLI uses
@@ -103,7 +104,7 @@ Both choices are remembered in this browser.
 | Message | What to do |
 | --- | --- |
 | *The password is incorrect, or the file is damaged.* | Check the password, including capitals and spaces. If it is right, the file was changed or cut short on the way; ask for it again. Tegami can't tell these apart. |
-| *HTML files are limited to 50 MiB. Choose Tegami file instead.* | Choose **Tegami file**, or send fewer files. |
+| *HTML files are limited to 500 MiB. Choose Tegami file instead.* | Choose **Tegami file**, or send fewer files. |
 | *Tegami files need Chrome, Edge, or another Chromium browser.* | Use a Chromium-based browser, or choose **HTML file**. |
 | *Rename the file first: …* | Rename the file and add it again. |
 | *The browser blocked the save dialog. Select the button again.* | Select the button again; the browser needs a fresh click. |
