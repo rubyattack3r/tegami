@@ -41,6 +41,11 @@ way.
   have recipients get theirs from a trusted source, not from the message that
   carries the `.tegami` file. Browser extensions can read pages, so use a
   profile without extensions you don't trust.
+- **Pages opened through a remote browser.** Some networks open web pages on
+  a remote computer and show the recipient only a copy. A delivery opened
+  that way is unlocked and decrypted on that computer, which sees the
+  password and the file. Download the delivery and open it locally instead;
+  see [Hosting a delivery](hosting.md).
 - **Passwords in browser memory.** Browsers give pages no way to wipe text
   from memory. The pages clear the password field and their own copies after
   use, but a typed password may stay in memory until the tab closes.

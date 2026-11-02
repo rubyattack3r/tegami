@@ -112,3 +112,4 @@ Both choices are remembered in this browser.
 | *Rename the file first: …* | Rename the file and add it again. |
 | *The browser blocked the save dialog. Select the button again.* | Select the button again; the browser needs a fresh click. |
 | *This is a ZIP file. Extract it, then choose the HTML delivery inside.* | Extract the ZIP and open the HTML file inside. |
+| A delivery opened from a website doesn't respond or unlock | Download it and open it from your computer instead. See [Hosting a delivery](hosting.md). |

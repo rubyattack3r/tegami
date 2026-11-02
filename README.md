@@ -72,6 +72,8 @@ pg_dump shop | tegami pack --input - --name shop.sql --output - \
 - [Getting started](docs/getting-started.md): download, verify, and send a
   first file
 - [Studio guide](docs/studio.md) and [CLI reference](docs/cli-reference.md)
+- [Hosting a delivery](docs/hosting.md): putting an HTML delivery on a
+  website so recipients can download it intact
 - [Security model](docs/security.md): what is protected and what isn't
 - [File formats](docs/formats.md): the `tegami/v1` specification
 - [Developer documentation](docs/development/index.md) for contributors
