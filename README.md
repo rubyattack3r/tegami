@@ -76,7 +76,7 @@ pg_dump shop | tegami pack --input - --name shop.sql --output - \
   website so recipients can download it intact
 - [Security model](docs/security.md): what is protected and what isn't
 - [File formats](docs/formats.md): the `tegami/v1` specification
-- [Developer documentation](docs/development/index.md) for contributors
+- [Developer documentation](docs/development/README.md) for contributors
 
 Report vulnerabilities as described in the [security policy](SECURITY.md).
 Changes are listed in the [changelog](CHANGELOG.md).

@@ -1,7 +1,7 @@
 # Developer documentation
 
 These pages are for contributors changing Tegami itself. People sending or
-opening files should start from the main [documentation index](../index.md).
+opening files should start from the main [documentation index](../README.md).
 
 - [Development setup](setup.md) covers the Go and Nix toolchains, the local
   gate, testing the pages in a browser, and recording the terminal demo.
