@@ -125,7 +125,7 @@ A change to how a page looks or behaves lands with:
 - `wasm/`: vendored Monocypher and the Argon2id WebAssembly build
 - `scripts/icons/`: converts Hugeicons into the sprite
 - `scripts/browsercheck/`: browser checks run by `make browser-test`
-- `docs/`: user guides from `docs/index.md`; contributor guides in
+- `docs/`: user guides from `docs/README.md`; contributor guides in
   `docs/development/`; screenshots and the terminal demo in `docs/assets/`,
   the demo recorded from `docs/demo.tape` with `make demo`
 - `SECURITY.md`: how to report a vulnerability

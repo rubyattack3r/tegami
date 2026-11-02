@@ -21,7 +21,7 @@ browser, offline.
 
 ## Contribute
 
-- [Developer documentation](development/index.md): setup, architecture, and
+- [Developer documentation](development/README.md): setup, architecture, and
   releasing.
 
 Every release reads and writes the `tegami/v1` format. A new format version
