@@ -13,6 +13,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   progress percentage, so large files no longer freeze the page while they
   open.
   HTML files made now don't open in the 0.1.0 Studio or CLI.
+- **Japanese pages read more naturally**, rewritten from Japanese rather than
+  following the English sentence by sentence.
+- The Studio recommends Chrome, Edge, or Firefox for large HTML files.
 
 ### Removed
 
