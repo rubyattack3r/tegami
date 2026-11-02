@@ -89,8 +89,9 @@ The Go CLI and the browser pages implement the same formats.
 - Add a language by adding its catalog and listing it in `languages` in
   `i18n.go`. `TestCatalogsMatch` checks keys and `{placeholder}` names.
 - Japanese follows the same copy rules: plain and direct, polite form
-  (です／ます), Microsoft-style katakana (ブラウザー, フォルダー). Translations
-  for user-facing security text need review by a native speaker.
+  (です／ます), Microsoft-style katakana (ブラウザー, フォルダー). Write it as
+  Japanese rather than following the English sentence by sentence: say the
+  cause before what to do, and keep terms consistent (復号, not 解除).
 - Codenames, filenames, `.tegami`, `tegami.html`, and units such as MiB stay
   untranslated. CLI messages stay English.
 - The CLI delivery page embeds only the keys it uses, keeping it unbranded.
