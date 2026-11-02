@@ -8,8 +8,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - **HTML deliveries hold up to 500 MiB**, up from 50 MiB, and still open in
-  any modern browser. Pages are opened in 4 MiB pieces with a progress
-  percentage, so large files no longer freeze the page while they open.
+  any modern browser. Safari may stop responding on large ones, so use
+  Chrome, Edge, or Firefox for those. Pages are opened in 4 MiB pieces with a
+  progress percentage, so large files no longer freeze the page while they
+  open.
   HTML files made now don't open in the 0.1.0 Studio or CLI.
 
 ### Removed

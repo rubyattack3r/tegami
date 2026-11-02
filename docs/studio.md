@@ -86,13 +86,16 @@ Both choices are remembered in this browser.
 | Task | Chromium (Chrome, Edge, Brave) | Firefox | Safari |
 | --- | --- | --- | --- |
 | Create or open an HTML file | Yes | Yes | Yes |
+| Open a large HTML file | Yes | Yes | May not load |
 | Create or open a Tegami file | Yes | No | No |
 
 ## Limits
 
 - **Size**: up to 500 MiB for an HTML file and 3 GiB for a Tegami file. For
   several files, the limit applies to the ZIP. Large HTML files are meant for
-  computers; a phone or tablet may not have the memory to open one.
+  computers; a phone or tablet may not have the memory to open one. Safari
+  may also stop responding on a large HTML file, so recipients should use
+  Chrome, Edge, or Firefox.
 - **Files**: up to 65,535 in one delivery. System files such as `.DS_Store`
   and `Thumbs.db` are left out.
 - **Filename**: up to 180 bytes, without `/`, `\`, or line breaks. The CLI uses
