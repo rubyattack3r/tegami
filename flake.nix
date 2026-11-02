@@ -15,7 +15,7 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
-      version = "0.1.0";
+      version = "0.2.0";
       packagesFor =
         system:
         let
